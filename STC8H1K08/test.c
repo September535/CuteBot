@@ -27,7 +27,6 @@ sfr     P5M0    =   0xca;
 
 sfr P5   = 0xC8;
 
-
 // PWM引脚定义
 sbit PWM_A1 = P1^7; // 电机A正转
 sbit PWM_A2 = P5^4; // 电机A反转
@@ -42,13 +41,21 @@ sbit R_RGB_r = P1^6 ;
 sbit R_RGB_g = P1^2 ;
 sbit R_RGB_b = P1^0 ;
 
-
 // 状态标志位
 bit isda; // 设备地址标志
 bit isma; // 存储地址标志
 unsigned char addr; // 存储接收到的内存地址
 unsigned char buffer[8]; // 存储接收到的数据
 int count_buffer,count,PWM;
+
+// PWM占空比的控制变量 (0-255)
+unsigned char L_R_pwm = 0;  // 左侧红色亮度
+unsigned char L_G_pwm = 0;  // 左侧绿色亮度
+unsigned char L_B_pwm = 0;  // 左侧蓝色亮度
+
+unsigned char R_R_pwm = 0;  // 右侧红色亮度
+unsigned char R_G_pwm = 0;  // 右侧绿色亮度
+unsigned char R_B_pwm = 0;  // 右侧蓝色亮度
 
 void Delay1ms(void)	//@22.1184MHz
 {
@@ -68,41 +75,137 @@ void delay_ms(unsigned int ms){
 		
 }
 
-void R_RGBColor(unsigned char red, unsigned char green, unsigned char blue) {
-    R_RGB_r = (red > 0) ? 0 : 1;   // 红色灯
-    R_RGB_g = (green > 0) ? 0 : 1; // 绿色灯
-    R_RGB_b = (blue > 0) ? 0 : 1;  // 蓝色灯
-}
-void L_RGBColor(unsigned char red, unsigned char green, unsigned char blue) {
-    L_RGB_r = (red > 0) ? 0 : 1;   // 红色灯
-    L_RGB_g = (green > 0) ? 0 : 1; // 绿色灯
-    L_RGB_b = (blue > 0) ? 0 : 1;  // 蓝色灯
+typedef struct {
+    int speed;      // 当前速度（0-100）
+    int direction;  // 方向：1（正转），2（反转），0（停止）
+} Motor;
+
+Motor leftMotor = {0, 0};  // 左轮电机
+Motor rightMotor = {0, 0}; // 右轮电机
+
+void initMotor(Motor *motor) {
+    motor->speed = 0;
+    motor->direction = 0;
 }
 
-// 控制电机的速度
-void setMotorSpeed(int pwmA, int pwmB) {
-    if (pwmA == 1) {
-        PWM_A1 = 0; // 控制电机A正转
+// 控制M2电机的速度
+void setRMotor(Motor *motor, int direction, int speed) {
+    if (speed < 0) speed = 0;
+    if (speed > 100) speed = 100;
+
+    motor->speed = speed;
+    motor->direction = direction;
+
+    if (direction == 1) { // 正转
+        PWM_B1 = 0;
+        PWM_B2 = 1;
+    } else if (direction == 2) { // 反转
+        PWM_B1 = 1;
+        PWM_B2 = 0;
+    } else { // 停止
+        PWM_B1 = 0;
+        PWM_B2 = 0;
+    }
+}
+// 控制M1电机的速度
+void setLMotor(Motor *motor, int direction, int speed) {
+    if (speed < 0) speed = 0;
+    if (speed > 100) speed = 100;
+
+    motor->speed = speed;
+    motor->direction = direction;
+
+    if (direction == 1) { // 正转
+        PWM_A1 = 0;
         PWM_A2 = 1;
-    } else if (pwmA == 2) {
+    } else if (direction == 2) { // 反转
         PWM_A1 = 1;
-        PWM_A2 = 0; // 控制电机A反转
+        PWM_A2 = 0;
+    } else { // 停止
+        PWM_A1 = 0;
+        PWM_A2 = 0;
+    }
+}
+
+void updateMotors() {
+    if (count > 100) count = 0; // 计数器重置
+    count += 1;
+
+    // 控制左轮
+    if (count < leftMotor.speed) {
+        PWM_A1 = (leftMotor.direction == 2) ? 1 : 0;
+        PWM_A2 = (leftMotor.direction == 1) ? 1 : 0;
     } else {
-        PWM_A1 = 0; // 停止电机A
+        PWM_A1 = 0;
         PWM_A2 = 0;
     }
 
-    if (pwmB == 1) {
-        PWM_B1 = 0; // 控制电机B正转
-        PWM_B2 = 1;
-    } else if (pwmB == 2) {
-        PWM_B1 = 1;
-        PWM_B2 = 0; // 控制电机B反转
+    // 控制右轮
+    if (count < rightMotor.speed) {
+        PWM_B1 = (rightMotor.direction == 2) ? 1 : 0;
+        PWM_B2 = (rightMotor.direction == 1) ? 1 : 0;
     } else {
-        PWM_B1 = 0; // 停止电机B
+        PWM_B1 = 0;
         PWM_B2 = 0;
     }
-		
+}
+
+void Timer0_Init(void) {
+    TMOD = 0x02;  // 设置定时器0为自动重载模式
+    TH0 = 0xFF;   // 设置定时器初值
+    TL0 = 0xFF;
+    EA = 1;       // 开启总中断
+    ET0 = 1;      // 使能定时器0中断
+    TR0 = 1;      // 启动定时器0
+	
+	  PT0 = 0;      // Timer0 中断优先级为低
+}
+
+// 定时器0中断服务函数，用于PWM输出
+void Timer0_ISR(void) interrupt 1 {
+    static unsigned int counter = 0;
+    counter++;
+    
+    if (counter < 255) {
+        // 左侧RGB控制
+        if (counter < L_R_pwm) L_RGB_r = 0;  // 红色亮度
+        else L_RGB_r = 1;
+        
+        if (counter < L_G_pwm) L_RGB_g = 0;  // 绿色亮度
+        else L_RGB_g = 1;
+        
+        if (counter < L_B_pwm) L_RGB_b = 0;  // 蓝色亮度
+        else L_RGB_b = 1;
+
+        // 右侧RGB控制
+        if (counter < R_R_pwm) R_RGB_r = 0;  // 红色亮度
+        else R_RGB_r = 1;
+        
+        if (counter < R_G_pwm) R_RGB_g = 0;  // 绿色亮度
+        else R_RGB_g = 1;
+        
+        if (counter < R_B_pwm) R_RGB_b = 0;  // 蓝色亮度
+        else R_RGB_b = 1;
+    } else {
+        counter = 0;
+    }
+    
+    TH0 = 0xFF;   // 重载定时器
+    TL0 = 0xFF;
+}
+
+// 设置左侧RGB的亮度值
+void Set_Left_RGB_Brightness(unsigned char red, unsigned char green, unsigned char blue) {
+    L_R_pwm = red;
+    L_G_pwm = green;
+    L_B_pwm = blue;
+}
+
+// 设置右侧RGB的亮度值
+void Set_Right_RGB_Brightness(unsigned char red, unsigned char green, unsigned char blue) {
+    R_R_pwm = red;
+    R_G_pwm = green;
+    R_B_pwm = blue;
 }
 
 void I2C_Isr() interrupt 24
@@ -158,6 +261,9 @@ void I2C_Isr() interrupt 24
   
 void main()
 {		
+//    unsigned char left_red, left_green, left_blue;
+//    unsigned char right_red, right_green, right_blue;
+	
 	// 初始化引脚为低电平
     PWM_A1 = 0;
     PWM_A2 = 0;
@@ -186,7 +292,6 @@ void main()
     P5M1 = 0x00;
 
     P_SW2 = 0x80;
-	
 
     I2CCFG = 0x81;                              //使能I2C从机模式
     I2CSLADR = 0X30;                            //设置从机设备地址寄存器I2CSLADR=0101_1010B
@@ -197,58 +302,37 @@ void main()
                                                 //主机若需要读数据则要发送5BH(0101_1011B)
     I2CSLST = 0x00;
     I2CSLCR = 0x78; // 0x00                     //禁止从机模式中断
+		PS = 1; 
 		EA = 1;
 		
     isda = 1;                                   //用户变量初始化
     isma = 1;
     addr = 1;
     I2CTXD = buffer[addr];
-		setMotorSpeed(0,0);
+		
+		initMotor(&leftMotor);
+    initMotor(&rightMotor);
+    
+		Timer0_Init();
 			
     while (1){
-						
-			if(buffer[0] == 1){
 			
-				if(count>100)count=0;  // 如果计数器count的值大于100，则将其重置为0
-				 count+=1;  // 计数器count的值加1
-				 Delay1ms();  // 延时1微秒
+        // 示例：左轮正转，速度为 70；右轮反转，速度为 50
+        setLMotor(&leftMotor, buffer[0], buffer[2]);  // 左轮正转，速度 70
+        setRMotor(&rightMotor, buffer[1], buffer[3]); // 右轮反转，速度 50
 
-				 PWM=buffer[6];  // 从buffer数组的第三个元素（索引为2）读取PWM值
+        updateMotors(); // 更新电机状态
+        Delay1ms();    // 延时 1ms
 
-				if(PWM>100)PWM=100;  // 如果PWM值大于100，则将其限制在100
-				if(PWM<0)PWM=0;  // 如果PWM值小于0，则将其限制在0
-
-				if(count<PWM)  // 如果计数器count的值小于PWM值
-				 {
-					setMotorSpeed(buffer[2],buffer[4]);  // 调用setMotorSpeed函数设置电机速度
-				 }
-				else 
-					setMotorSpeed(0,0);  // 否则，将电机速度设置为0（停止电机）
-			}
 			
-			if(buffer[0] == 2){
-				
-				if(buffer[6] == 1){
-				
-					R_RGBColor(1,0,0);
-					L_RGBColor(1,0,0);
-					delay_ms(200);		
-					
-					R_RGBColor(0,1,0);
-					L_RGBColor(0,1,0);
-					delay_ms(200);			
-					
-					R_RGBColor(0,0,1);
-					L_RGBColor(0,0,1);
-					delay_ms(200);		
-
-					R_RGBColor(0,0,0);
-					L_RGBColor(0,0,0);
-					delay_ms(50);						
+				if(buffer[3] == 4){
 				}
-				
-				
-			}
-			
+
+        Set_Left_RGB_Brightness(buffer[0], buffer[1], buffer[2]);
+
+        Set_Right_RGB_Brightness(buffer[0], buffer[1], buffer[2]);
+        
+        delay_ms(500);
+
 		}   
 }
