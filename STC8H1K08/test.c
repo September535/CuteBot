@@ -324,15 +324,12 @@ void main()
         updateMotors(); // 更新电机状态
         Delay1ms();    // 延时 1ms
 
-			
-				if(buffer[3] == 4){
-				}
-
-        Set_Left_RGB_Brightness(buffer[0], buffer[1], buffer[2]);
-
-        Set_Right_RGB_Brightness(buffer[0], buffer[1], buffer[2]);
-        
-        delay_ms(500);
-
-		}   
+if(buffer[3] == 4 || buffer[3] == 6){
+	  Set_Left_RGB_Brightness(buffer[0], buffer[1], buffer[2]);
+	}
+	    
+if(buffer[3] == 5 || buffer[3] == 6){
+	  Set_Right_RGB_Brightness(buffer[0], buffer[1], buffer[2]);
+	}     
+ }   
 }
