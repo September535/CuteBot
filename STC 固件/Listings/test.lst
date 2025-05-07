@@ -1,0 +1,442 @@
+C51 COMPILER V9.54   TEST                                                                  04/25/2025 18:37:15 PAGE 1   
+
+
+C51 COMPILER V9.54, COMPILATION OF MODULE TEST
+OBJECT MODULE PLACED IN .\Objects\test.obj
+COMPILER INVOKED BY: C:\Keil_v5\C51\BIN\C51.EXE test.c LARGE OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listing
+                    -s\test.lst) TABS(2) OBJECT(.\Objects\test.obj)
+
+line level    source
+
+   1          #include "STC8xxxx.H"
+   2          #include "intrins.h"
+   3          
+   4          #define PWM5_2      0x01  //P1.7
+   5          #define PWM6_2      0x04  //P5.4
+   6          #define ENO5P       0x01
+   7          #define ENO6P       0x04
+   8          #define ENO7P       0x10
+   9          #define ENO8P       0x40
+  10          #define PWM_PERIOD  1000
+  11          
+  12          unsigned int PWM_Period = 50;  // PWM周期，单位为定时器计数值
+  13          
+  14          // PWM引脚定义
+  15          sbit PWM_A1 = P1^7; // 电机A正转
+  16          sbit PWM_A2 = P5^4; // 电机A反转
+  17          sbit PWM_B2 = P3^4; // 电机B正转
+  18          sbit PWM_B1 = P3^3; // 电机B反转
+  19          
+  20          sbit L_RGB_r = P3^2;
+  21          sbit L_RGB_g = P3^5;
+  22          sbit L_RGB_b = P3^6;
+  23          
+  24          sbit R_RGB_r = P1^6;
+  25          sbit R_RGB_g = P1^2;
+  26          sbit R_RGB_b = P1^0;
+  27          
+  28          // 状态标志位
+  29          bit isda; // 设备地址标志
+  30          bit isma; // 存储地址标志
+  31          unsigned char addr; // 存储接收到的内存地址
+  32          unsigned char buffer[8]; // 存储接收到的数据
+  33          unsigned char pwm_counter = 0; // PWM计数器
+  34          unsigned char count = 0; // PWM计数器
+  35          
+  36          // PWM占空比的控制变量 (0-255)
+  37          unsigned char L_R_pwm = 0;  // 左侧红色亮度
+  38          unsigned char L_G_pwm = 0;  // 左侧绿色亮度
+  39          unsigned char L_B_pwm = 0;  // 左侧蓝色亮度
+  40          
+  41          unsigned char R_R_pwm = 0;  // 右侧红色亮度
+  42          unsigned char R_G_pwm = 0;  // 右侧绿色亮度
+  43          unsigned char R_B_pwm = 0;  // 右侧蓝色亮度
+  44          
+  45          unsigned char index;
+  46          
+  47          typedef struct {
+  48              int speed;      // 当前速度（0-100）
+  49              int direction;  // 方向：1（正转），2（反转），0（停止）
+  50              int brake;      // 刹车标志：1=刹车，0=正常
+  51          } Motor;
+  52          
+  53          Motor leftMotor = {0, 0};  // 左轮电机
+  54          Motor rightMotor = {0, 0}; // 右轮电机
+C51 COMPILER V9.54   TEST                                                                  04/25/2025 18:37:15 PAGE 2   
+
+  55          void Delay10ms(void)  //@11.0592MHz
+  56          {
+  57   1        unsigned char data i, j;
+  58   1      
+  59   1        _nop_();
+  60   1        _nop_();
+  61   1        i = 144;
+  62   1        j = 157;
+  63   1        do
+  64   1        {
+  65   2          while (--j);
+  66   2        } while (--i);
+  67   1      }
+  68          
+  69          
+  70          void motor_init()
+  71          {
+  72   1        
+  73   1        
+  74   1        
+  75   1        
+  76   1        PWMB_CCER1_Disable();
+  77   1        PWMB_CCER2_Disable();
+  78   1        
+  79   1        PWMB_PSCR = 0x0000; // 预分频寄存器
+  80   1        PWMB_DTR  = 0;    // 死区时间配置
+  81   1        PWMB_ARR = 100; // 自动重装载寄存器,  控制PWM周期
+  82   1        PWMB_CCER1  = 0;
+  83   1        PWMB_CCER2  = 0;
+  84   1        PWMB_SR1    = 0;
+  85   1        PWMB_SR2    = 0;
+  86   1        PWMB_ENO    = 0;    // IO输出允许
+  87   1        PWMB_PS     = 0;
+  88   1        PWMB_IER    = 0;
+  89   1      
+  90   1        PWMB_CCMR1 = 0x68; //通道模式配置
+  91   1        PWMB_CCMR2 = 0x68;
+  92   1        PWMB_CCMR3 = 0x68;
+  93   1        PWMB_CCMR4 = 0x68;
+  94   1        
+  95   1        
+  96   1        PWMB_CC5E_Enable();
+  97   1        PWMB_CC6E_Enable();
+  98   1        PWMB_CC7E_Enable();
+  99   1        PWMB_CC8E_Enable();
+ 100   1      
+ 101   1       
+ 102   1        PWMB_AutoReload(PWM_PERIOD);
+ 103   1      PWMB_ENO =0x00;
+ 104   1        PWM5P_OUT_EN();
+ 105   1        PWM6P_OUT_EN();
+ 106   1        PWM7P_OUT_EN();
+ 107   1        PWM8P_OUT_EN();
+ 108   1      
+ 109   1      
+ 110   1        PWM5_USE_P17();
+ 111   1        PWM6_USE_P54();
+ 112   1        PWM7_USE_P33();
+ 113   1        PWM8_USE_P34();
+ 114   1        PWMB_BrakeOutputEnable();   //使能主输出
+ 115   1        PWMB_CEN_Enable();
+ 116   1        
+C51 COMPILER V9.54   TEST                                                                  04/25/2025 18:37:15 PAGE 3   
+
+ 117   1        PWMB_Duty5(0);
+ 118   1        PWMB_Duty6(0);
+ 119   1        PWMB_Duty7(0);
+ 120   1        PWMB_Duty8(0);
+ 121   1      }
+ 122          
+ 123          void initMotor(Motor *motor) {
+ 124   1          motor->speed = 0;
+ 125   1          motor->direction = 0;
+ 126   1      }
+ 127          
+ 128          // 定时器0初始化函数
+ 129          void Timer0_Init() {
+ 130   1          TMOD |= 0x01;  // 设置定时器0为模式1（16位定时器）
+ 131   1          TH0 = (65536 - PWM_Period) / 256;  // 初始化定时器0高8位
+ 132   1          TL0 = (65536 - PWM_Period) % 256;  // 初始化定时器0低8位
+ 133   1          ET0 = 1;  // 使能定时器0中断
+ 134   1          EA = 1;   // 全局中断使能
+ 135   1          TR0 = 1;  // 启动定时器0
+ 136   1      }
+ 137          
+ 138          
+ 139          // 定时器0中断服务函数
+ 140          void Timer0_ISR() interrupt 1 {
+ 141   1          static unsigned int count = 0;
+ 142   1          TH0 = (65536 - PWM_Period) / 256;  // 重新加载定时器0高8位
+ 143   1          TL0 = (65536 - PWM_Period) % 256;  // 重新加载定时器0低8位
+ 144   1          count++;
+ 145   1        
+ 146   1          
+ 147   1          
+ 148   1      
+ 149   1          L_RGB_r = (count < L_R_pwm) ? 0 : 1;
+ 150   1        if(L_G_pwm == 0) L_RGB_g = 1;
+ 151   1          
+ 152   1         else L_RGB_g = (count < L_G_pwm) ? 0 : 1;
+ 153   1          L_RGB_b = (count < L_B_pwm) ? 0 : 1;
+ 154   1          
+ 155   1          R_RGB_r = (count < R_R_pwm) ? 0 : 1;
+ 156   1        if(R_G_pwm == 0) R_RGB_g = 1;
+ 157   1         else R_RGB_g = (count < R_G_pwm) ? 0 : 1;
+ 158   1          R_RGB_b = (count < R_B_pwm) ? 0 : 1;
+ 159   1        
+ 160   1          
+ 161   1      
+ 162   1          if (count >= PWM_Period) {
+ 163   2              count = 0;  // 计数器归零
+ 164   2          }
+ 165   1      }
+ 166          
+ 167          
+ 168          // 控制M2电机的速度
+ 169          
+ 170          
+ 171          void setRMotor(int direction, int speed) {
+ 172   1        
+ 173   1          // 将输入0-100映射到70-100
+ 174   1          int mapped_speed = 70 + (speed * 30 / 100);
+ 175   1          
+ 176   1          // 确保映射后的速度在70-100范围内
+ 177   1          if (mapped_speed < 70) mapped_speed = 70;
+ 178   1          if (mapped_speed > 100) mapped_speed = 100;
+C51 COMPILER V9.54   TEST                                                                  04/25/2025 18:37:15 PAGE 4   
+
+ 179   1      
+ 180   1      
+ 181   1          if (direction == 1) { // 正转
+ 182   2            
+ 183   2            PWMB_CCR7 = 0;
+ 184   2            PWMB_CCR8 = mapped_speed*8;
+ 185   2            
+ 186   2          } else if (direction == 2) { // 反转
+ 187   2            
+ 188   2            PWMB_CCR8 =0;
+ 189   2            PWMB_CCR7 = mapped_speed*8;
+ 190   2      
+ 191   2          } else { // 停止
+ 192   2              PWMB_CCR7 = 0;
+ 193   2            PWMB_CCR8 = 0;
+ 194   2          }
+ 195   1      }
+ 196          
+ 197          // 控制M1电机的速度
+ 198          
+ 199          int pwm_value = 0;
+ 200          
+ 201          void setLMotor(int direction, int speed) {
+ 202   1          // 将输入0-100映射到70-100
+ 203   1          int mapped_speed = 70 + (speed * 30 / 100);
+ 204   1          
+ 205   1          // 确保映射后的速度在70-100范围内
+ 206   1          if (mapped_speed < 70) mapped_speed = 70;
+ 207   1          if (mapped_speed > 100) mapped_speed = 100;
+ 208   1          
+ 209   1          // 转换为PWM值（假设PWM范围0-800）
+ 210   1           pwm_value = mapped_speed * 8;
+ 211   1      
+ 212   1          if (direction == 1) { // 正转
+ 213   2              PWMB_CCR6 = pwm_value;
+ 214   2              PWMB_CCR5 = 0;
+ 215   2          } 
+ 216   1          else if (direction == 2) { // 反转
+ 217   2              PWMB_CCR6 = 0;
+ 218   2              PWMB_CCR5 = pwm_value;
+ 219   2          } 
+ 220   1          else { // 停止
+ 221   2              PWMB_CCR6 = 0;
+ 222   2              PWMB_CCR5 = 0;
+ 223   2          }
+ 224   1      }
+ 225          
+ 226          // 设置左侧RGB的亮度值
+ 227          void Set_Left_RGB_Brightness(unsigned char red, unsigned char green, unsigned char blue) {
+ 228   1          L_R_pwm = red/5;
+ 229   1          L_G_pwm = green/5;
+ 230   1          L_B_pwm = blue/5;
+ 231   1        
+ 232   1          if(red <= 10)L_RGB_r = 1;
+ 233   1          if(green <= 10)L_RGB_g = 1;
+ 234   1          if(blue <= 10)L_RGB_b = 1;
+ 235   1        
+ 236   1      }
+ 237          
+ 238          // 设置右侧RGB的亮度值
+ 239          void Set_Right_RGB_Brightness(unsigned char red, unsigned char green, unsigned char blue) {
+ 240   1          R_R_pwm = red/5;
+C51 COMPILER V9.54   TEST                                                                  04/25/2025 18:37:15 PAGE 5   
+
+ 241   1          R_G_pwm = green/5;
+ 242   1          R_B_pwm = blue/5;
+ 243   1        
+ 244   1          if(red <= 10)R_RGB_r = 1;
+ 245   1        
+ 246   1          if(green <= 10)R_RGB_g = 1;
+ 247   1        
+ 248   1          if(blue <= 10)R_RGB_b = 1;
+ 249   1      
+ 250   1        
+ 251   1      }
+ 252          
+ 253          void I2C_Isr() interrupt 24 {
+ 254   1          _push_(P_SW2);
+ 255   1          P_SW2 |= 0x80;
+ 256   1      
+ 257   1          if (I2CSLST & 0x40) {
+ 258   2              I2CSLST &= ~0x40; // 处理START事件
+ 259   2          } else if (I2CSLST & 0x20) {
+ 260   2              I2CSLST &= ~0x20; // 处理RECV事件
+ 261   2              if (isda) {
+ 262   3                  isda = 0; // 处理RECV事件（RECV DEVICE ADDR）
+ 263   3              } else if (isma) {
+ 264   3                  isma = 0; // 处理RECV事件（RECV MEMORY ADDR）
+ 265   3                  addr = I2CRXD;
+ 266   3                  I2CTXD = buffer[addr];
+ 267   3              } else {
+ 268   3                  buffer[addr++] = I2CRXD; // 处理RECV事件（RECV DATA）
+ 269   3                  if (addr >= 8) addr = 0;
+ 270   3              }
+ 271   2          } else if (I2CSLST & 0x10) {
+ 272   2              I2CSLST &= ~0x10; // 处理SEND事件
+ 273   2              if (I2CSLST & 0x02) {
+ 274   3                  I2CTXD = 0xff; // 接收到NAK则停止读取数据
+ 275   3              } else {
+ 276   3                  I2CTXD = buffer[++addr]; // 接收到ACK则继续读取数据
+ 277   3              }
+ 278   2          } else if (I2CSLST & 0x08) {
+ 279   2              I2CSLST &= ~0x08; // 处理STOP事件
+ 280   2              isda = 1;
+ 281   2              isma = 1;
+ 282   2          }
+ 283   1      
+ 284   1          _pop_(P_SW2);
+ 285   1      }
+ 286          
+ 287          int pwm_out1=50;
+ 288          int pwm_out2=100; 
+ 289          int pwm_out3=150;
+ 290          int pwm_out4=200;
+ 291          int pwm_out5=0;
+ 292          int pwm_out6=50;
+ 293          int pwm_out7=0;
+ 294          int pwm_out8=10;
+ 295           
+ 296          void PWM_Init()
+ 297          {
+ 298   1        PWMB_PSCR = 0x0000; // 预分频寄存器
+ 299   1        PWMB_DTR  = 0;    // 死区时间配置
+ 300   1        PWMB_ARR = 1000;  // 自动重装载寄存器,  控制PWM周期
+ 301   1        PWMB_CCER1  = 0;
+ 302   1        PWMB_CCER2  = 0;
+C51 COMPILER V9.54   TEST                                                                  04/25/2025 18:37:15 PAGE 6   
+
+ 303   1        PWMB_SR1    = 0;
+ 304   1        PWMB_SR2    = 0;
+ 305   1        PWMB_ENO    = 0;    // IO输出允许
+ 306   1        PWMB_PS     = 0;
+ 307   1        PWMB_IER    = 0;
+ 308   1        
+ 309   1       
+ 310   1          /* PWM5 -- P17 */
+ 311   1        PWMB_CCMR1  = 0x68;   // 通道模式配置, PWM模式1, 预装载允许
+ 312   1        PWMB_CCR5   = 0;  // 比较值, 控制占空比(高电平时钟数)
+ 313   1        PWMB_CCER1 |= 0x01;   // 开启比较输出, 高电平有效
+ 314   1        PWMB_PS    |= 1;    // 选择IO
+ 315   1        PWMB_ENO   |= 0x01;   // IO输出允许
+ 316   1       
+ 317   1          /* PWM6 -- P54 */
+ 318   1        PWMB_CCMR2  = 0x68;   // 通道模式配置, PWM模式1, 预装载允许
+ 319   1        PWMB_CCR6   = 0;  // 比较值, 控制占空比(高电平时钟数)
+ 320   1        PWMB_CCER1 |= 0x10;   // 开启比较输出, 高电平有效
+ 321   1        PWMB_PS    |= (1<<2); // 选择IO
+ 322   1        PWMB_ENO   |= 0x04;   // IO输出允许
+ 323   1       
+ 324   1          /* PWM7 -- P33 */
+ 325   1        PWMB_CCMR3  = 0x68;   // 通道模式配置, PWM模式1, 预装载允许
+ 326   1        PWMB_CCR7   = 0;  // 比较值, 控制占空比(高电平时钟数)
+ 327   1        PWMB_CCER2 |= 0x01;   // 开启比较输出, 高电平有效
+ 328   1        PWMB_PS    |= (1<<4); // 选择IO
+ 329   1        PWMB_ENO   |= 0x10;   // IO输出允许
+ 330   1       
+ 331   1          /* PWM8 -- P34 */
+ 332   1        PWMB_CCMR4  = 0x68;   // 通道模式配置, PWM模式1, 预装载允许
+ 333   1        PWMB_CCR8   = 0;    // 比较值, 控制占空比(高电平时钟数)
+ 334   1        PWMB_CCER2 |= 0x10;   // 开启比较输出, 高电平有效
+ 335   1        PWMB_PS    |= (1<<6); // 选择IO
+ 336   1        PWMB_ENO   |= 0x40;   // IO输出允许
+ 337   1       
+ 338   1        PWMB_EGR    = 0x01;   //产生一次更新事件
+ 339   1        PWMB_BRK    = 0x80;   // 主输出使能 相当于总开关
+ 340   1        PWMB_CR1    = 0x81;   // 使能计数器, 允许自动重装载寄存器缓冲
+ 341   1      }
+ 342          
+ 343          void main() {
+ 344   1          
+ 345   1          P1M0 = 0xcf; P1M1 = 0x00;  
+ 346   1          P3M0 = 0xff; P3M1 = 0x00; 
+ 347   1          P5M0 = 0xff; P5M1 = 0x00; 
+ 348   1      
+ 349   1          P_SW2 = 0x80;
+ 350   1      
+ 351   1          I2CCFG = 0x81; // 使能I2C从机模式
+ 352   1          I2CSLADR = 0X30; // 设置从机设备地址
+ 353   1          I2CSLST = 0x00;
+ 354   1          I2CSLCR = 0x78; // 禁止从机模式中断
+ 355   1          
+ 356   1      
+ 357   1          R_RGB_r = 1; // 默认关闭RGB灯
+ 358   1          R_RGB_g = 1;
+ 359   1          R_RGB_b = 1;
+ 360   1      
+ 361   1          L_RGB_r = 1;
+ 362   1          L_RGB_g = 1;
+ 363   1          L_RGB_b = 1; 
+ 364   1          
+C51 COMPILER V9.54   TEST                                                                  04/25/2025 18:37:15 PAGE 7   
+
+ 365   1          PS = 1;
+ 366   1          
+ 367   1          // 初始化定时器0
+ 368   1          Timer0_Init();
+ 369   1          
+ 370   1          EA = 1; // 开启总中断
+ 371   1      
+ 372   1          isda = 1; // 用户变量初始化
+ 373   1          isma = 1;
+ 374   1          addr = 1;
+ 375   1          I2CTXD = buffer[addr];
+ 376   1          //motor_init();
+ 377   1      PWM_Init();
+ 378   1      
+ 379   1      //setLMotor(1, 100);
+ 380   1      //setRMotor(1,100);
+ 381   1      
+ 382   1          while (1) {
+ 383   2            
+ 384   2              switch (buffer[0]) {
+ 385   3                  case 1:
+ 386   3                      setLMotor(buffer[1], buffer[2]);
+ 387   3                      break;
+ 388   3                  case 2:
+ 389   3                      setRMotor(buffer[1], buffer[2]);
+ 390   3                      break;
+ 391   3                  case 3:
+ 392   3                      Set_Right_RGB_Brightness(buffer[1], buffer[2], buffer[3]);
+ 393   3                      break;
+ 394   3                  case 4:
+ 395   3                      //break;
+ 396   3                  case 5:
+ 397   3                      Set_Left_RGB_Brightness(buffer[1], buffer[2], buffer[3]);
+ 398   3                      if (buffer[0] == 5) {
+ 399   4                         Set_Right_RGB_Brightness(buffer[1], buffer[2], buffer[3]);
+ 400   4                      }
+ 401   3                      break;
+ 402   3                  default:
+ 403   3                      break;
+ 404   3              }  
+ 405   2          }
+ 406   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1537    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =     52    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----       2
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      2    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
